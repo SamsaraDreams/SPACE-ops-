@@ -157,12 +157,21 @@ class HojaFalsa:
     def filas_ocupadas(self, pestana, columna_cliente):
         return len(VENTAS)
 
+    def pintar_celda(self, pestana, fila, columna, color_hex):
+        self.pintadas.append({
+            "pestana": pestana,
+            "fila": fila,
+            "columna": columna,
+            "color": color_hex,
+        })
+
 
 @pytest.fixture(autouse=True)
 def hoja_falsa(monkeypatch):
     falsa = HojaFalsa()
     for nombre in ("listar_pestanas", "leer_valores", "leer_colores",
-                   "mapa_de_columnas", "pestana_del_mes", "filas_ocupadas"):
+                   "mapa_de_columnas", "pestana_del_mes", "filas_ocupadas",
+                   "pintar_celda"):
         monkeypatch.setattr(sheets, nombre, getattr(falsa, nombre))
     monkeypatch.setattr(sheets, "PESTANAS_PROTEGIDAS",
                         sheets.PESTANAS_PROTEGIDAS)
@@ -277,3 +286,58 @@ def test_una_lectura_buena_marca_ok():
     r = server._responder(server._leer_estado, "175", None)
     assert r["ok"] is True
     assert r["estado"] == "listas"
+
+
+# --------------------------------------------------------------------------
+# marcar_estado
+# --------------------------------------------------------------------------
+
+def test_avanza_de_listas_a_instalado(hoja_falsa):
+    # F:175 esta en 'listas'; instalado es el siguiente paso valido.
+    r = server._marcar_estado("175", "instalado", None)
+    assert r["marcado"] is True
+    assert r["estado_anterior"] == "listas"
+    assert r["estado_nuevo"] == "instalado"
+    assert r["fila"] == 5
+    # Verificar que se pinto la celda correcta con el color de instalado.
+    assert len(hoja_falsa.pintadas) == 1
+    p = hoja_falsa.pintadas[0]
+    assert p["color"] == R.COLOR_ESTADO["instalado"]
+    assert p["fila"] == 5
+
+
+def test_no_puede_retroceder_de_listas_a_pedido(hoja_falsa):
+    r = server._responder(server._marcar_estado, "175", "pedido", None)
+    assert r["ok"] is False
+    assert r["motivo"] == "regla"
+    assert "regresar" in r["mensaje"]
+    assert hoja_falsa.pintadas == []
+
+
+def test_no_puede_saltar_de_pedido_a_instalado(hoja_falsa):
+    # F:276 (Pedro Gomez) solo tiene 'pedido' marcado.
+    r = server._responder(server._marcar_estado, "276", "instalado", None)
+    assert r["ok"] is False
+    assert r["motivo"] == "regla"
+    assert "listas" in r["mensaje"]
+    assert hoja_falsa.pintadas == []
+
+
+def test_estado_invalido_se_reporta(hoja_falsa):
+    r = server._responder(server._marcar_estado, "175", "enviado", None)
+    assert r["ok"] is False
+    assert r["motivo"] == "regla"
+    assert hoja_falsa.pintadas == []
+
+
+def test_folio_inexistente_no_pinta_nada(hoja_falsa):
+    r = server._marcar_estado("999", "pedido", None)
+    assert r["encontrado"] is False
+    assert hoja_falsa.pintadas == []
+
+
+def test_responder_envuelve_marcar_estado():
+    r = server._responder(server._marcar_estado, "175", "instalado", None)
+    assert r["ok"] is True
+    assert r["marcado"] is True
+    assert r["color"] == R.COLOR_ESTADO["instalado"]

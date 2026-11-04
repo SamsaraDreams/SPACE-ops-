@@ -348,6 +348,92 @@ def diagnostico() -> dict:
     return _responder(_diagnostico)
 
 
+# --------------------------------------------------------------------------
+# marcar_estado
+# --------------------------------------------------------------------------
+
+def _marcar_estado(folio: str, estado: str, mes: str | None) -> dict:
+    pestana = mes or sheets.pestana_del_mes()
+    columnas = sheets.mapa_de_columnas(pestana)
+
+    col_comentarios = columnas.grupo("COMENTARIOS")
+    letra_com = R.letra_columna(col_comentarios)
+
+    comentarios = sheets.leer_valores(
+        pestana, f"{letra_com}{R.FILA_PRIMER_DATO}:{letra_com}{R.FILA_ULTIMO_DATO}")
+
+    buscado = str(folio).strip().upper().lstrip("F").lstrip(":").strip()
+    fila_encontrada = None
+    for i, celda in enumerate(comentarios):
+        texto = str(celda[0]).upper() if celda else ""
+        if not texto:
+            continue
+        for encontrado in re.findall(r"\bF\s*[:.]?\s*(\d{1,4})\b", texto):
+            if encontrado == buscado:
+                fila_encontrada = R.FILA_PRIMER_DATO + i
+                break
+        if fila_encontrada:
+            break
+
+    if fila_encontrada is None:
+        return {
+            "encontrado": False,
+            "mensaje": (
+                f"No encontre el folio {folio} en '{pestana}'. "
+                "Puede estar en otro mes, o la venta no tiene folio anotado."
+            ),
+        }
+
+    # Leer el estado actual antes de escribir.
+    colores_actuales = {}
+    for est, encabezado in R.COLUMNA_ESTADO.items():
+        col = columnas.grupo(encabezado)
+        letra = R.letra_columna(col)
+        leido = sheets.leer_colores(
+            pestana, f"{letra}{fila_encontrada}:{letra}{fila_encontrada}")
+        colores_actuales[est] = leido[0][0] if leido and leido[0] else None
+
+    estado_actual = R.estado_desde_colores(colores_actuales)
+
+    # Valida que el avance sea legal (lanza ErrorDeRegla si no).
+    R.validar_avance(estado_actual, estado)
+
+    # Pintar la celda del nuevo estado.
+    col_estado = columnas.grupo(R.COLUMNA_ESTADO[estado])
+    sheets.pintar_celda(pestana, fila_encontrada, col_estado, R.COLOR_ESTADO[estado])
+
+    # Invalidar el cache de columnas no es necesario; el color no afecta
+    # la estructura. Pero si mapa_de_columnas esta cacheado por pestana,
+    # los colores se leen siempre frescos (leer_colores no esta cacheado).
+
+    return {
+        "marcado": True,
+        "folio": folio,
+        "pestana": pestana,
+        "fila": fila_encontrada,
+        "estado_anterior": estado_actual or "sin marcar",
+        "estado_nuevo": estado,
+        "celda": f"{R.letra_columna(col_estado)}{fila_encontrada}",
+        "color": R.COLOR_ESTADO[estado],
+    }
+
+
+@mcp.tool()
+def marcar_estado(folio: str, estado: str, mes: str | None = None) -> dict:
+    """Avanza el estado de un pedido pintando la celda correspondiente.
+
+    El equipo registra el progreso con colores, no con texto. Esta
+    herramienta pinta la celda del estado nuevo con el color correcto
+    y valida que el avance sea legal (no se puede retroceder ni saltar pasos).
+
+    Args:
+        folio: numero de folio, por ejemplo 175 o F:175.
+        estado: uno de 'pedido', 'listas', 'instalado', 'terminado'.
+        mes: nombre exacto de la pestana. Si se omite, usa el mes actual.
+    """
+    return _responder(_marcar_estado, folio, estado, mes)
+
+
 if __name__ == "__main__":
     log.info("space-ops arrancando por stdio")
     mcp.run()
