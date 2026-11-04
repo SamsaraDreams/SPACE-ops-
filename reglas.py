@@ -153,24 +153,38 @@ def hex_a_rgb(hexa: str) -> dict[str, float]:
     """'8EAADB' -> {'red': 0.557, 'green': 0.667, 'blue': 0.859}.
 
     La API de Sheets usa floats de 0 a 1, no enteros de 0 a 255.
+    Lanza ErrorDeRegla si el hex no tiene exactamente 6 caracteres
+    hexadecimales validos (patron del repo de referencia).
     """
-    h = str(hexa).lstrip("#").strip()
-    if len(h) != 6:
-        raise ErrorDeRegla(f"Color invalido: {hexa!r}")
-    return {
-        "red": int(h[0:2], 16) / 255.0,
-        "green": int(h[2:4], 16) / 255.0,
-        "blue": int(h[4:6], 16) / 255.0,
-    }
+    h = str(hexa).lstrip("#").strip().upper()
+    if len(h) != 6 or not all(c in "0123456789ABCDEF" for c in h):
+        raise ErrorDeRegla(
+            f"Color invalido: {hexa!r}. Se esperan 6 caracteres hex, "
+            "por ejemplo '8EAADB'."
+        )
+    try:
+        return {
+            "red": int(h[0:2], 16) / 255.0,
+            "green": int(h[2:4], 16) / 255.0,
+            "blue": int(h[4:6], 16) / 255.0,
+        }
+    except ValueError as e:
+        raise ErrorDeRegla(f"Color invalido: {hexa!r}") from e
 
 
 def rgb_a_hex(rgb: dict | None) -> str:
-    """Inverso de hex_a_rgb. Un color ausente en la API significa blanco."""
+    """Inverso de hex_a_rgb. Un color ausente en la API significa blanco.
+
+    Los valores se recortan a [0, 255] antes de convertir: la API de Sheets
+    puede devolver valores como 0.9999999 que se redondean a 255 sin problema,
+    pero valores fuera de rango (raro pero posible con ediciones manuales)
+    producian caracteres hex invalidos. Patron del repo de referencia.
+    """
     if not rgb:
         return "FFFFFF"
-    r = round(float(rgb.get("red", 0)) * 255)
-    g = round(float(rgb.get("green", 0)) * 255)
-    b = round(float(rgb.get("blue", 0)) * 255)
+    r = max(0, min(255, round(float(rgb.get("red", 0)) * 255)))
+    g = max(0, min(255, round(float(rgb.get("green", 0)) * 255)))
+    b = max(0, min(255, round(float(rgb.get("blue", 0)) * 255)))
     return f"{r:02X}{g:02X}{b:02X}"
 
 
@@ -185,9 +199,19 @@ def esta_marcada(rgb: dict | None, estado: str, tolerancia: int = 24) -> bool:
 
     Se usa tolerancia porque la API devuelve floats y el redondeo puede
     mover un punto cada canal.
+
+    La distancia se calcula canal a canal (Manhattan en RGB):
+        d = |R1-R2| + |G1-G2| + |B1-B2|
+    Con tolerancia=24 acepta una diferencia de ~8 por canal, suficiente
+    para absorber el error de punto flotante de la API.
     """
     if estado not in COLOR_ESTADO:
-        raise ErrorDeRegla(f"Estado desconocido: {estado!r}")
+        raise ErrorDeRegla(
+            f"Estado desconocido: {estado!r}. "
+            f"Los validos son: {', '.join(ESTADOS)}."
+        )
+    if not isinstance(tolerancia, int) or tolerancia < 0:
+        raise ErrorDeRegla(f"Tolerancia invalida: {tolerancia!r}. Debe ser entero >= 0.")
     actual = rgb_a_hex(rgb)
     if actual in ("FFFFFF", "000000"):
         return False
@@ -215,7 +239,12 @@ def validar_avance(actual: str | None, nuevo: str) -> None:
     """Deja avanzar solo hacia adelante, y sin saltarse pasos.
 
     Lanza ErrorDeRegla con un mensaje que el agente puede repetir tal cual.
+    Acepta None como actual (pedido sin estado aun) solo cuando nuevo=='pedido'.
     """
+    if not isinstance(nuevo, str):
+        raise ErrorDeRegla(
+            f"El estado debe ser texto, no {type(nuevo).__name__!r}."
+        )
     if nuevo not in ESTADOS:
         raise ErrorDeRegla(
             f"Estado desconocido: {nuevo!r}. Los validos son {', '.join(ESTADOS)}."

@@ -274,3 +274,97 @@ def test_mes_sin_pestana_avisa():
     with pytest.raises(R.ErrorDeRegla) as e:
         R.elegir_pestana_mes(PESTANAS, dt.date(2026, 11, 3))
     assert "NOVIEMBRE" in str(e.value)
+
+
+# --------------------------------------------------------------------------
+# Mejoras de robustez (patron del repo de referencia)
+# --------------------------------------------------------------------------
+
+class TestHexARgbEstricto:
+    """hex_a_rgb ahora valida los caracteres, no solo el largo."""
+
+    def test_color_valido_sigue_funcionando(self):
+        rgb = R.hex_a_rgb("8EAADB")
+        assert abs(rgb["red"] - 142 / 255) < 0.001
+        assert abs(rgb["green"] - 170 / 255) < 0.001
+        assert abs(rgb["blue"] - 219 / 255) < 0.001
+
+    def test_color_con_hash_se_acepta(self):
+        """El hash opcional al inicio es compatible con CSS."""
+        rgb = R.hex_a_rgb("#8EAADB")
+        assert abs(rgb["red"] - 142 / 255) < 0.001
+
+    def test_largo_incorrecto_falla(self):
+        with pytest.raises(R.ErrorDeRegla, match="invalido"):
+            R.hex_a_rgb("8EAA")
+
+    def test_caracteres_no_hex_fallan(self):
+        with pytest.raises(R.ErrorDeRegla, match="invalido"):
+            R.hex_a_rgb("ZZZZZZ")
+
+    def test_cadena_vacia_falla(self):
+        with pytest.raises(R.ErrorDeRegla, match="invalido"):
+            R.hex_a_rgb("")
+
+    def test_minusculas_se_aceptan(self):
+        """La validacion es insensible a mayusculas."""
+        rgb_min = R.hex_a_rgb("8eaadb")
+        rgb_may = R.hex_a_rgb("8EAADB")
+        assert rgb_min == rgb_may
+
+
+class TestRgbAHexConClamp:
+    """rgb_a_hex ya no produce hex invalido con valores fuera de [0,1]."""
+
+    def test_valor_normal(self):
+        assert R.rgb_a_hex({"red": 1.0, "green": 0.0, "blue": 0.0}) == "FF0000"
+
+    def test_sin_color_es_blanco(self):
+        assert R.rgb_a_hex(None) == "FFFFFF"
+        assert R.rgb_a_hex({}) == "FFFFFF"
+
+    def test_valor_por_encima_del_maximo_se_recorta(self):
+        """Valor > 1.0 ya no produce caracter fuera de rango."""
+        resultado = R.rgb_a_hex({"red": 1.5, "green": 0.0, "blue": 0.0})
+        assert resultado == "FF0000"
+
+    def test_valor_negativo_se_recorta_a_cero(self):
+        resultado = R.rgb_a_hex({"red": -0.1, "green": 0.0, "blue": 0.0})
+        assert resultado == "000000"
+
+    def test_ida_y_vuelta_de_todos_los_estados(self):
+        for hexa in R.COLOR_ESTADO.values():
+            assert R.rgb_a_hex(R.hex_a_rgb(hexa)) == hexa
+
+
+class TestEstaMarcadaConValidacion:
+    """esta_marcada valida el estado y la tolerancia."""
+
+    def test_estado_invalido_lanza_error_util(self):
+        with pytest.raises(R.ErrorDeRegla) as e:
+            R.esta_marcada(None, "enviado")
+        assert "enviado" in str(e.value)
+        assert "validos" in str(e.value)
+
+    def test_tolerancia_negativa_no_se_acepta(self):
+        with pytest.raises(R.ErrorDeRegla, match="Tolerancia"):
+            R.esta_marcada(None, "pedido", tolerancia=-1)
+
+    def test_tolerancia_cero_exige_coincidencia_exacta(self):
+        exacto = R.hex_a_rgb("8EAADB")
+        # Diferencia real: rojo es 0.52 en lugar de 0.557 -> dist > 0
+        distinto = {"red": 0.52, "green": 0.6666667, "blue": 0.85882354}
+        assert R.esta_marcada(exacto, "pedido", tolerancia=0)
+        assert not R.esta_marcada(distinto, "pedido", tolerancia=0)
+
+
+class TestValidarAvanceTipos:
+    """validar_avance rechaza tipos incorrectos explicitamente."""
+
+    def test_estado_no_string_da_error_claro(self):
+        with pytest.raises(R.ErrorDeRegla, match="texto"):
+            R.validar_avance("pedido", 42)
+
+    def test_none_como_nuevo_da_error(self):
+        with pytest.raises(R.ErrorDeRegla):
+            R.validar_avance("pedido", None)

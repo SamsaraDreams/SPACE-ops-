@@ -82,7 +82,13 @@ def _cita(pestana: str) -> str:
 
 
 def _comprobar_permitida(pestana: str) -> None:
-    if R.sin_acentos(pestana) in PESTANAS_PROTEGIDAS:
+    """Rechaza pestanas historicas o de configuracion.
+
+    La comparacion es insensible a acentos y mayusculas, igual que
+    el resto de comparaciones de encabezados en reglas.py.
+    """
+    normalizada = R.sin_acentos(pestana)
+    if any(normalizada == R.sin_acentos(p) for p in PESTANAS_PROTEGIDAS):
         raise R.ErrorDeRegla(
             f"La pestana '{pestana}' es historica y no se modifica desde aqui."
         )
@@ -105,15 +111,22 @@ def listar_pestanas() -> list[str]:
 
 @lru_cache(maxsize=32)
 def _gid(pestana: str) -> int:
-    """El id numerico de la pestana, que batchUpdate necesita."""
+    """El id numerico de la pestana, que batchUpdate necesita.
+
+    Se cachea por nombre exacto. Si la pestana no existe, falla rapido
+    con un mensaje claro en lugar de llegar hasta el batchUpdate de Google.
+    """
     meta = _servicio().spreadsheets().get(
         spreadsheetId=_id_hoja(),
         fields="sheets.properties(title,sheetId)",
     ).execute()
     for s in meta.get("sheets", []):
         if s["properties"]["title"] == pestana:
-            return s["properties"]["sheetId"]
-    raise ErrorDeHoja(f"No existe la pestana '{pestana}'.")
+            return int(s["properties"]["sheetId"])
+    raise ErrorDeHoja(
+        f"No existe la pestana '{pestana}'. "
+        "Verifica el nombre exacto con diagnostico()."
+    )
 
 
 def leer_valores(pestana: str, rango: str) -> list[list]:
@@ -135,14 +148,22 @@ def leer_colores(pestana: str, rango: str) -> list[list[dict | None]]:
 
     Esto es lo que el skill de Google Workspace de Hermes no hace, y es
     justo el dato que lleva el estado de cada pedido.
+
+    Se piden AMBOS formatos (userEntered y effective) y se usa userEntered
+    como fuente de verdad —es el que se escribe con pintar_celda—, cayendo
+    al effective solo si userEntered viene vacio. Patron del repo de referencia:
+    hay celdas cuyo color heredado del tema no aparece en userEntered pero
+    si en effectiveFormat.
     """
     try:
         resp = _servicio().spreadsheets().get(
             spreadsheetId=_id_hoja(),
             ranges=[f"{_cita(pestana)}!{rango}"],
             includeGridData=True,
-            fields=("sheets.data.rowData.values.userEnteredFormat."
-                    "backgroundColor"),
+            fields=(
+                "sheets.data.rowData.values.userEnteredFormat.backgroundColor,"
+                "sheets.data.rowData.values.effectiveFormat.backgroundColor"
+            ),
         ).execute()
     except Exception as e:
         raise ErrorDeHoja(f"No pude leer los colores de {pestana}: {e}") from e
@@ -158,14 +179,23 @@ def leer_colores(pestana: str, rango: str) -> list[list[dict | None]]:
     for fila in datos[0].get("rowData", []):
         celdas = []
         for celda in fila.get("values", []):
-            fmt = celda.get("userEnteredFormat") or {}
-            celdas.append(fmt.get("backgroundColor"))
+            # userEnteredFormat es el que pintamos nosotros; effectiveFormat
+            # incluye herencia del tema. Se prefiere el primero.
+            fmt_ue = (celda.get("userEnteredFormat") or {}).get("backgroundColor")
+            fmt_ef = (celda.get("effectiveFormat") or {}).get("backgroundColor")
+            celdas.append(fmt_ue or fmt_ef)
         filas.append(celdas)
     return filas
 
 
+@lru_cache(maxsize=32)
 def mapa_de_columnas(pestana: str) -> R.Columnas:
-    """Lee las filas 3 y 4 y arma el mapa de columnas de esa pestana."""
+    """Lee las filas 3 y 4 y arma el mapa de columnas de esa pestana.
+
+    Se cachea porque varias herramientas lo llaman por la misma pestana
+    en la misma sesion y los encabezados no cambian durante el dia.
+    El cache se invalida cuando el proceso reinicia (startup de Hermes).
+    """
     filas = leer_valores(
         pestana,
         f"A{R.FILA_ENCABEZADO_GRUPO}:AF{R.FILA_ENCABEZADO_CAMPO}",
@@ -201,11 +231,21 @@ def escribir_fila(pestana: str, fila: int, valores: dict[int, object]) -> list[s
 
     `valores` mapea indice de columna -> valor. Se usa batchUpdate de
     values para que o entran todas o no entra ninguna.
+    Lanza ErrorDeRegla si valores esta vacio o contiene indices invalidos.
     """
     _comprobar_permitida(pestana)
     R.validar_fila(fila)
     if not valores:
-        return []
+        raise R.ErrorDeRegla(
+            "escribir_fila recibio un dict vacio. "
+            "Pasa al menos una columna con su valor."
+        )
+    columnas_invalidas = [c for c in valores if not isinstance(c, int) or c < 1]
+    if columnas_invalidas:
+        raise R.ErrorDeRegla(
+            f"Indices de columna invalidos: {columnas_invalidas}. "
+            "Deben ser enteros >= 1."
+        )
 
     data = []
     escritas = []
