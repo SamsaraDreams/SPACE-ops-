@@ -1,0 +1,13 @@
+# Servidor MCP space-ops
+#
+# El SDK de MCP cambio de nombres en la version 2: FastMCP paso a ser
+# MCPServer. server.py funciona con las dos, pero conviene fijar una.
+mcp>=1.2
+
+# Google Sheets, Calendar y Gmail
+google-api-python-client>=2.100
+google-auth>=2.23
+google-auth-oauthlib>=1.1
+
+# Pruebas
+pytest>=7.4
