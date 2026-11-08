@@ -5,6 +5,7 @@ en memoria copiados de VENTAS SPACE 2.0. Sirve para verificar la logica
 de cada herramienta antes de conectar nada real.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -341,3 +342,92 @@ def test_responder_envuelve_marcar_estado():
     assert r["ok"] is True
     assert r["marcado"] is True
     assert r["color"] == R.COLOR_ESTADO["instalado"]
+
+
+# --------------------------------------------------------------------------
+# _cita — escape apostrophes (#10)
+# --------------------------------------------------------------------------
+
+def test_cita_escapa_apostrofe():
+    """Pestanas con apostrofe no rompen la notacion A1."""
+    import sheets as sh
+    resultado = sh._cita("O'REILLY 2026")
+    assert resultado == "'O''REILLY 2026'"
+
+
+def test_cita_sin_apostrofe_no_cambia():
+    import sheets as sh
+    assert sh._cita("OCTUBRE 2026 ANGELA") == "'OCTUBRE 2026 ANGELA'"
+
+
+# --------------------------------------------------------------------------
+# apendizar — valida la fila devuelta (#2)
+# --------------------------------------------------------------------------
+
+class HojaFalsaApendizar:
+    """Simula sheets.apendizar devolviendo distintas filas."""
+
+    def __init__(self, fila_devuelta: int):
+        self.fila_devuelta = fila_devuelta
+        self.llamadas = []
+
+    def apendizar(self, pestana, rango, valores):
+        self.llamadas.append((pestana, rango, valores))
+        return self.fila_devuelta
+
+
+def test_apendizar_fila_valida_no_lanza(monkeypatch):
+    """Una fila dentro del rango de totales se acepta."""
+    # Testeamos la funcion real de sheets.py pero mockeando la parte de Google.
+    import sheets as sh
+
+    _RANGO = re.compile(r"!\$?[A-Z]+\$?(\d+)")
+    fila_ok = R.FILA_PRIMER_DATO  # 5
+
+    # Reemplazar el servicio de Google con un stub minimo
+    class ServicioFalso:
+        class _Values:
+            def append(self, **kwargs):
+                class _Req:
+                    def execute(self):
+                        return {"updates": {"updatedRange": f"'OCTUBRE 2026'!A{fila_ok}"}}
+                return _Req()
+        def spreadsheets(self):
+            class _SS:
+                def values(ss_self):
+                    return ServicioFalso._Values()
+            return _SS()
+
+    monkeypatch.setattr(sh, "_servicio", lambda: ServicioFalso())
+    monkeypatch.setattr(sh, "_id_hoja", lambda: "FAKE_ID")
+    monkeypatch.setattr(sh, "_comprobar_permitida", lambda p: None)
+
+    result = sh.apendizar("OCTUBRE 2026 ANGELA", "A5:Z5", ["valor"])
+    assert result == fila_ok
+
+
+def test_apendizar_fila_fuera_de_rango_lanza(monkeypatch):
+    """Una fila fuera del rango de totales (> 44) lanza ErrorDeHoja."""
+    import sheets as sh
+
+    fila_mala = R.FILA_ULTIMO_DATO + 1  # 45
+
+    class ServicioFalso:
+        class _Values:
+            def append(self, **kwargs):
+                class _Req:
+                    def execute(self):
+                        return {"updates": {"updatedRange": f"'OCTUBRE 2026'!A{fila_mala}"}}
+                return _Req()
+        def spreadsheets(self):
+            class _SS:
+                def values(ss_self):
+                    return ServicioFalso._Values()
+            return _SS()
+
+    monkeypatch.setattr(sh, "_servicio", lambda: ServicioFalso())
+    monkeypatch.setattr(sh, "_id_hoja", lambda: "FAKE_ID")
+    monkeypatch.setattr(sh, "_comprobar_permitida", lambda p: None)
+
+    with pytest.raises(sh.ErrorDeHoja, match="fuera del rango"):
+        sh.apendizar("OCTUBRE 2026 ANGELA", "A5:Z5", ["valor"])

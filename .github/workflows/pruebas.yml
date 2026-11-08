@@ -15,6 +15,6 @@ jobs:
         with:
           python-version: "3.11"
       - name: Instalar dependencias
-        run: pip install pytest
+        run: pip install -r requirements.txt
       - name: Correr pruebas
         run: pytest tests/ -q

@@ -77,8 +77,12 @@ def _id_hoja() -> str:
 
 
 def _cita(pestana: str) -> str:
-    """Las pestanas con espacios necesitan comillas en notacion A1."""
-    return f"'{pestana}'"
+    """Las pestanas con espacios necesitan comillas en notacion A1.
+
+    Las comillas simples dentro del nombre se escapan duplicandolas,
+    segun la especificacion de notacion A1 de Google Sheets.
+    """
+    return "'" + pestana.replace("'", "''") + "'"
 
 
 def _comprobar_permitida(pestana: str) -> None:
@@ -209,8 +213,13 @@ def mapa_de_columnas(pestana: str) -> R.Columnas:
 # Escritura
 # --------------------------------------------------------------------------
 
-def escribir_celda(pestana: str, fila: int, columna: int, valor) -> str:
-    """Escribe un valor en una celda. Devuelve el rango escrito."""
+def escribir_celda(pestana: str, fila: int, columna: int, valor,
+                   value_input_option: str = "RAW") -> str:
+    """Escribe un valor en una celda. Devuelve el rango escrito.
+
+    Usa ``value_input_option="USER_ENTERED"`` cuando el valor es una fecha
+    o un monto con formula; el default RAW es mas seguro para texto y numeros.
+    """
     _comprobar_permitida(pestana)
     R.validar_fila(fila)
     destino = f"{R.letra_columna(columna)}{fila}"
@@ -218,7 +227,7 @@ def escribir_celda(pestana: str, fila: int, columna: int, valor) -> str:
         _servicio().spreadsheets().values().update(
             spreadsheetId=_id_hoja(),
             range=f"{_cita(pestana)}!{destino}",
-            valueInputOption="USER_ENTERED",
+            valueInputOption=value_input_option,
             body={"values": [[valor]]},
         ).execute()
     except Exception as e:
@@ -226,12 +235,14 @@ def escribir_celda(pestana: str, fila: int, columna: int, valor) -> str:
     return destino
 
 
-def escribir_fila(pestana: str, fila: int, valores: dict[int, object]) -> list[str]:
+def escribir_fila(pestana: str, fila: int, valores: dict[int, object],
+                  value_input_option: str = "RAW") -> list[str]:
     """Escribe varias celdas de una misma fila en una sola llamada.
 
     `valores` mapea indice de columna -> valor. Se usa batchUpdate de
     values para que o entran todas o no entra ninguna.
     Lanza ErrorDeRegla si valores esta vacio o contiene indices invalidos.
+    Usa ``value_input_option="USER_ENTERED"`` para fechas y formulas.
     """
     _comprobar_permitida(pestana)
     R.validar_fila(fila)
@@ -260,7 +271,7 @@ def escribir_fila(pestana: str, fila: int, valores: dict[int, object]) -> list[s
     try:
         _servicio().spreadsheets().values().batchUpdate(
             spreadsheetId=_id_hoja(),
-            body={"valueInputOption": "USER_ENTERED", "data": data},
+            body={"valueInputOption": value_input_option, "data": data},
         ).execute()
     except Exception as e:
         raise ErrorDeHoja(f"No pude escribir la fila {fila}: {e}") from e
@@ -327,7 +338,20 @@ def apendizar(pestana: str, rango: str, valores: list) -> int:
             f"Google no devolvio la fila asignada ({actualizado!r}). "
             "Revisa la hoja antes de volver a intentar, para no duplicar."
         )
-    return int(coincidencia.group(1))
+    fila = int(coincidencia.group(1))
+    # La fila debe caer dentro del rango que suman los totales (K5:K44).
+    # Si Google la asigno fuera de ese rango, la venta no se contaria
+    # y hay que revisar la hoja antes de reintentar.
+    try:
+        R.validar_fila(fila)
+    except R.ErrorDeRegla as e:
+        raise ErrorDeHoja(
+            f"Google asigno la fila {fila}, que esta fuera del rango de "
+            f"totales ({R.FILA_PRIMER_DATO}-{R.FILA_ULTIMO_DATO}). "
+            "Revisa la hoja antes de volver a intentar, para no duplicar. "
+            f"Detalle: {e}"
+        ) from e
+    return fila
 
 
 # --------------------------------------------------------------------------
@@ -344,10 +368,7 @@ def filas_ocupadas(pestana: str, columna_cliente: int) -> int:
     letra = R.letra_columna(columna_cliente)
     valores = leer_valores(
         pestana, f"{letra}{R.FILA_PRIMER_DATO}:{letra}{R.FILA_ULTIMO_DATO}")
-    return sum(
-        1 for f in valores
-        if f and str(f[0]).strip() and not str(f[0]).startswith("=")
-    )
+    return sum(1 for f in valores if f and str(f[0]).strip())
 
 
 def primera_fila_libre(pestana: str, columna_cliente: int) -> int:
