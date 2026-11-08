@@ -66,7 +66,7 @@ mcp_servers:
       TZ: America/Mexico_City
     timeout: 60
     tools:
-      include: [diagnostico, leer_estado_pedido, consultar_stock, buscar_cliente]
+      include: [diagnostico, leer_estado_pedido, consultar_stock, buscar_cliente, marcar_estado]
       prompts: false
       resources: false
 ```
@@ -92,6 +92,7 @@ encabezados.
 | `leer_estado_pedido` | En qué estado va un pedido, leyendo el color |
 | `consultar_stock` | Material disponible, por tela, tipo o color |
 | `buscar_cliente` | Busca por teléfono normalizado o nombre, para no duplicar |
+| `marcar_estado` | Avanza el estado de un pedido pintando la celda correspondiente |
 
 ## Decisiones que conviene conocer antes de tocar el código
 
@@ -117,9 +118,9 @@ suelta ahí rompe la comunicación con Hermes.
 
 ## Pendiente
 
-- Herramientas de escritura: `registrar_venta`, `registrar_pago`,
-  `marcar_estado`, `agendar_visita`, `registrar_paqueteria`,
-  `folio_cotizacion_siguiente`, `registrar_cotizacion`, `pedidos_atrasados`.
+- Herramientas de escritura pendientes: `registrar_venta`, `registrar_pago`,
+  `agendar_visita`, `registrar_paqueteria`, `folio_cotizacion_siguiente`,
+  `registrar_cotizacion`, `pedidos_atrasados`.
 - Columna de folio propia en las hojas de mes. Hoy el folio vive dentro
   del texto de comentarios (`F:175`) y solo 2 de 186 ventas lo tienen,
   así que `leer_estado_pedido` encuentra pocos pedidos hasta que exista

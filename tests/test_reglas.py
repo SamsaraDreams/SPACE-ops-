@@ -368,3 +368,34 @@ class TestValidarAvanceTipos:
     def test_none_como_nuevo_da_error(self):
         with pytest.raises(R.ErrorDeRegla):
             R.validar_avance("pedido", None)
+
+
+# --------------------------------------------------------------------------
+# elegir_pestana_mes — fallback month-only (#8)
+# --------------------------------------------------------------------------
+
+PESTANAS_SIN_ANIO = [
+    "ENERO 2026", "FEBRERO 2026", "JUNIO ANGELA", "JULIO ANGELA",
+    "STOCK", "INSTALACIONES",
+]
+
+
+def test_pestana_sin_anio_se_encuentra_por_fallback():
+    """Si no hay pestana con el anio, acepta una sin anio en el nombre."""
+    resultado = R.elegir_pestana_mes(PESTANAS_SIN_ANIO, dt.date(2026, 6, 15))
+    assert resultado == "JUNIO ANGELA"
+
+
+def test_pestana_con_anio_tiene_prioridad_sobre_sin_anio():
+    """Si existen ambas versiones, la del anio explicito gana."""
+    pestanas = PESTANAS_SIN_ANIO + ["JUNIO 2026"]
+    resultado = R.elegir_pestana_mes(pestanas, dt.date(2026, 6, 15))
+    assert resultado == "JUNIO 2026"
+
+
+def test_fallback_sin_anio_tambien_detecta_duplicado():
+    """Dos pestanas sin anio para el mismo mes → pide decidir."""
+    with pytest.raises(R.ErrorDeRegla, match="cual usar"):
+        R.elegir_pestana_mes(
+            ["JULIO ANGELA", "JULIO NORTE"], dt.date(2026, 7, 1)
+        )

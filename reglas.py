@@ -390,15 +390,28 @@ def nombre_mes(fecha) -> str:
 def elegir_pestana_mes(pestanas: list[str], fecha) -> str:
     """Encuentra la pestana del mes, tolerando sufijos como ' ANGELA'.
 
-    Si hay varias candidatas (junio tiene dos), lanza error en vez de
-    adivinar: que una persona diga cual es la buena.
+    Busca primero pestanas que contengan tanto el mes como el anio (p. ej.
+    'OCTUBRE 2026 ANGELA'). Si no encuentra ninguna, acepta pestanas que
+    contengan el mes sin ningun anio en el nombre (p. ej. 'JUNIO ANGELA'),
+    para compatibilidad con hojas mas antiguas.
+
+    Si hay varias candidatas lanza error en vez de adivinar: que una
+    persona diga cual es la buena.
     """
     mes = nombre_mes(fecha)
     anio = str(fecha.year)
+
     candidatas = [
         p for p in pestanas
         if mes in sin_acentos(p) and anio in sin_acentos(p)
     ]
+    if not candidatas:
+        # Fallback: pestanas del mes sin año explícito en el nombre.
+        candidatas = [
+            p for p in pestanas
+            if mes in sin_acentos(p)
+            and not re.search(r"\b20\d\d\b", sin_acentos(p))
+        ]
     if not candidatas:
         raise ErrorDeRegla(
             f"No existe la pestana de {mes} {anio}. "

@@ -4,8 +4,8 @@ Arranca por stdio: Hermes lo lanza como subproceso, sin puertos ni URL
 publica. Cada herramienta valida sus entradas y devuelve lo que hizo,
 para que el agente pueda confirmarlo al equipo.
 
-Esta primera version expone solo lectura. Las herramientas de escritura
-se agregan cuando estas pasen sus pruebas contra la copia de la hoja.
+Expone herramientas de lectura y la herramienta de escritura marcar_estado,
+validada con el conjunto de pruebas antes de conectar a la hoja real.
 """
 
 from __future__ import annotations
@@ -60,6 +60,47 @@ def _responder(fn, *args, **kwargs) -> dict:
         }
 
 
+
+# --------------------------------------------------------------------------
+# Auxiliares privados
+# --------------------------------------------------------------------------
+
+def _fila_por_folio(pestana: str, columnas: "R.Columnas", folio: str) -> "int | None":
+    """Devuelve la fila de datos donde vive el folio, o None si no existe.
+
+    El folio vive dentro del texto de comentarios con formato 'F:175'.
+    Se busca con una expresion regular tolerante a espacios y puntos.
+    """
+    col_comentarios = columnas.grupo("COMENTARIOS")
+    letra_com = R.letra_columna(col_comentarios)
+    comentarios = sheets.leer_valores(
+        pestana,
+        f"{letra_com}{R.FILA_PRIMER_DATO}:{letra_com}{R.FILA_ULTIMO_DATO}",
+    )
+    buscado = str(folio).strip().upper().lstrip("F").lstrip(":").strip()
+    for i, celda in enumerate(comentarios):
+        texto = str(celda[0]).upper() if celda else ""
+        if not texto:
+            continue
+        for encontrado in re.findall(r"\bF\s*[:.]?\s*(\d{1,4})\b", texto):
+            if encontrado == buscado:
+                return R.FILA_PRIMER_DATO + i
+    return None
+
+
+def _colores_de_fila(pestana: str, columnas: "R.Columnas", fila: int) -> "dict[str, object]":
+    """Lee los colores de todas las celdas de estado en una sola llamada."""
+    cols = {est: columnas.grupo(enc) for est, enc in R.COLUMNA_ESTADO.items()}
+    c_min, c_max = min(cols.values()), max(cols.values())
+    rango = (f"{R.letra_columna(c_min)}{fila}:{R.letra_columna(c_max)}{fila}")
+    celdas = sheets.leer_colores(pestana, rango)
+    fila_datos = celdas[0] if celdas else []
+    return {
+        est: (fila_datos[col - c_min] if col - c_min < len(fila_datos) else None)
+        for est, col in cols.items()
+    }
+
+
 # --------------------------------------------------------------------------
 # leer_estado_pedido
 # --------------------------------------------------------------------------
@@ -68,30 +109,14 @@ def _leer_estado(folio: str, mes: str | None) -> dict:
     pestana = mes or sheets.pestana_del_mes()
     columnas = sheets.mapa_de_columnas(pestana)
 
-    col_comentarios = columnas.grupo("COMENTARIOS")
     col_cliente = columnas.grupo("CLIENTE")
-    letra_com = R.letra_columna(col_comentarios)
     letra_cli = R.letra_columna(col_cliente)
-
-    comentarios = sheets.leer_valores(
-        pestana, f"{letra_com}{R.FILA_PRIMER_DATO}:{letra_com}{R.FILA_ULTIMO_DATO}")
     clientes = sheets.leer_valores(
         pestana, f"{letra_cli}{R.FILA_PRIMER_DATO}:{letra_cli}{R.FILA_ULTIMO_DATO}")
 
     # El folio vive dentro del texto de comentarios, con formato 'F:175'.
     # Cuando exista la columna de folio propia, esto se simplifica.
-    buscado = str(folio).strip().upper().lstrip("F").lstrip(":").strip()
-    fila_encontrada = None
-    for i, celda in enumerate(comentarios):
-        texto = str(celda[0]).upper() if celda else ""
-        if not texto:
-            continue
-        for encontrado in re.findall(r"\bF\s*[:.]?\s*(\d{1,4})\b", texto):
-            if encontrado == buscado:
-                fila_encontrada = R.FILA_PRIMER_DATO + i
-                break
-        if fila_encontrada:
-            break
+    fila_encontrada = _fila_por_folio(pestana, columnas, folio)
 
     if fila_encontrada is None:
         return {
@@ -102,13 +127,7 @@ def _leer_estado(folio: str, mes: str | None) -> dict:
             ),
         }
 
-    colores = {}
-    for estado, encabezado in R.COLUMNA_ESTADO.items():
-        col = columnas.grupo(encabezado)
-        letra = R.letra_columna(col)
-        leido = sheets.leer_colores(
-            pestana, f"{letra}{fila_encontrada}:{letra}{fila_encontrada}")
-        colores[estado] = leido[0][0] if leido and leido[0] else None
+    colores = _colores_de_fila(pestana, columnas, fila_encontrada)
 
     estado = R.estado_desde_colores(colores)
     i = fila_encontrada - R.FILA_PRIMER_DATO
@@ -155,13 +174,35 @@ def _consultar_stock(texto: str | None, solo_completas: bool) -> dict:
     filas = sheets.leer_valores("STOCK", "B3:L1000")
     busqueda = R.normalizar_nombre(texto) if texto else ""
 
+    # Indices dentro de la fila B..L (11 columnas, 0-indexadas desde B).
+    # La columna H queda vacia: el bloque de articulos empieza en I.
+    # TODO: leer la fila de encabezados de STOCK y resolver por nombre,
+    #       igual que las pestanas de mes, cuando el formato se confirme.
+    _COL_NUMERO = 0   # B
+    _COL_TIPO   = 1   # C
+    _COL_TELA   = 2   # D
+    _COL_FASCIA = 3   # E
+    _COL_ANCHO  = 4   # F
+    _COL_ALTO   = 5   # G
+    # H (idx 6) queda vacio en la hoja
+    _COL_ARTICULO = 7  # I
+    _COL_COLOR    = 8  # J
+    _COL_PIEZAS   = 9  # K
+    _COL_TAMANO   = 10 # L
+
     persianas, articulos = [], []
     for fila in filas:
-        # B..L son 11 columnas. La H va vacia en la hoja: el bloque de
-        # articulos empieza en la I, no en la H.
         fila = list(fila) + [""] * (11 - len(fila))
-        numero, tipo, tela, fascia, ancho, alto = fila[0:6]
-        articulo, color, piezas, tamano = fila[7], fila[8], fila[9], fila[10]
+        numero  = fila[_COL_NUMERO]
+        tipo    = fila[_COL_TIPO]
+        tela    = fila[_COL_TELA]
+        fascia  = fila[_COL_FASCIA]
+        ancho   = fila[_COL_ANCHO]
+        alto    = fila[_COL_ALTO]
+        articulo = fila[_COL_ARTICULO]
+        color    = fila[_COL_COLOR]
+        piezas   = fila[_COL_PIEZAS]
+        tamano   = fila[_COL_TAMANO]
 
         if str(tipo).strip() and str(tipo).strip() != "_":
             registro = {
@@ -230,11 +271,23 @@ def _buscar_cliente(telefono: str | None, nombre: str | None,
             "para identificar al cliente."
         )
 
-    pestanas = [
-        p for p in sheets.listar_pestanas()
-        if any(m in R.sin_acentos(p) for m in R.MESES)
-        and R.sin_acentos(p) not in sheets.PESTANAS_PROTEGIDAS
-    ][-meses:]
+    def _mes_orden(nombre: str) -> tuple:
+        n = R.sin_acentos(nombre)
+        idx_mes = next((i for i, m in enumerate(R.MESES) if m in n), 0)
+        m_anio = re.search(r"\b(20\d\d)\b", n)
+        return (int(m_anio.group(1)) if m_anio else 0, idx_mes)
+
+    pestanas = sorted(
+        [
+            p for p in sheets.listar_pestanas()
+            if any(m in R.sin_acentos(p) for m in R.MESES)
+            and not any(
+                R.sin_acentos(p) == R.sin_acentos(pp)
+                for pp in sheets.PESTANAS_PROTEGIDAS
+            )
+        ],
+        key=_mes_orden,
+    )[-meses:]
 
     coincidencias = []
     for pestana in pestanas:
@@ -260,7 +313,7 @@ def _buscar_cliente(telefono: str | None, nombre: str | None,
                 return str(fila[idx]) if idx < len(fila) else ""
 
             cliente = celda(c_cli).strip()
-            if not cliente or cliente.startswith("="):
+            if not cliente:
                 continue
 
             tel_fila = R.normalizar_telefono(celda(c_tel))
@@ -356,24 +409,7 @@ def _marcar_estado(folio: str, estado: str, mes: str | None) -> dict:
     pestana = mes or sheets.pestana_del_mes()
     columnas = sheets.mapa_de_columnas(pestana)
 
-    col_comentarios = columnas.grupo("COMENTARIOS")
-    letra_com = R.letra_columna(col_comentarios)
-
-    comentarios = sheets.leer_valores(
-        pestana, f"{letra_com}{R.FILA_PRIMER_DATO}:{letra_com}{R.FILA_ULTIMO_DATO}")
-
-    buscado = str(folio).strip().upper().lstrip("F").lstrip(":").strip()
-    fila_encontrada = None
-    for i, celda in enumerate(comentarios):
-        texto = str(celda[0]).upper() if celda else ""
-        if not texto:
-            continue
-        for encontrado in re.findall(r"\bF\s*[:.]?\s*(\d{1,4})\b", texto):
-            if encontrado == buscado:
-                fila_encontrada = R.FILA_PRIMER_DATO + i
-                break
-        if fila_encontrada:
-            break
+    fila_encontrada = _fila_por_folio(pestana, columnas, folio)
 
     if fila_encontrada is None:
         return {
@@ -385,13 +421,7 @@ def _marcar_estado(folio: str, estado: str, mes: str | None) -> dict:
         }
 
     # Leer el estado actual antes de escribir.
-    colores_actuales = {}
-    for est, encabezado in R.COLUMNA_ESTADO.items():
-        col = columnas.grupo(encabezado)
-        letra = R.letra_columna(col)
-        leido = sheets.leer_colores(
-            pestana, f"{letra}{fila_encontrada}:{letra}{fila_encontrada}")
-        colores_actuales[est] = leido[0][0] if leido and leido[0] else None
+    colores_actuales = _colores_de_fila(pestana, columnas, fila_encontrada)
 
     estado_actual = R.estado_desde_colores(colores_actuales)
 
